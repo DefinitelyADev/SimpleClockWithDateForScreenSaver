@@ -25,10 +25,12 @@
             font-size: 22vw; /* Font size scales with viewport width */
             margin-bottom: 0rem;
             font-weight: 600;
+            transition: opacity 0.3s ease, margin-bottom 0.5s ease;
         }
         .date {
             font-size: 10vw; /* Font size scales with viewport width */
             font-weight: 400;
+            transition: opacity 0.3s ease;
         }
 
         .wlr {
@@ -39,6 +41,37 @@
             position: absolute;
             top: 15px;
             right: 20px;
+            transition: top 0.5s ease;
+        }
+
+        /* Loading state */
+        .loading {
+            opacity: 0.5;
+        }
+
+        /* Error state */
+        .error {
+            color: #ff6b6b;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .clock {
+                font-size: 25vw;
+            }
+            .date {
+                font-size: 12vw;
+            }
+        }
+
+        @media (max-height: 400px) {
+            .clock {
+                font-size: 15vh;
+                margin-bottom: 0.5rem;
+            }
+            .date {
+                font-size: 8vh;
+            }
         }
     </style>
 </head>
@@ -55,68 +88,295 @@
     <div class="date" id="date"></div>
 
     <script>
-        function updateTime() {
-            const now = new Date();
-            const hours = String(now.getHours()).padStart(2, '0');
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            const seconds = String(now.getSeconds()).padStart(2, '0');
-            //// Croatian
-            // const days = ['Nedjelja', 'Ponedjeljak', 'Utorak', 'Srijeda', 'Četvrtak', 'Petak', 'Subota'];
-            //// English
-            // const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            //// Spanish
-            // const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-            //// French
-            // const days = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
-            //// German
-            // const days = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
-            //// Italian
-            // const days = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
-            //// Portuguese
-            // const days = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
-            //// Dutch
-            // const days = ['Zondag', 'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag'];
-            //// Russian
-            // const days = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
-            //// Chinese (Simplified)
-            // const days = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-            //// Japanese
-            // const days = ['日曜日', '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日'];
-            //// Arabic
-            // const days = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-            //// Hindi
-            // const days = ['रविवार', 'सोमवार', 'मंगलवार', 'बुधवार', 'गुरुवार', 'शुक्रवार', 'शनिवार'];
-            //// Greek
-            const days = ['Κυριακή', 'Δευτέρα', 'Τρίτη', 'Τετάρτη', 'Πέμπτη', 'Παρασκευή', 'Σάββατο'];
-            const day = days[now.getDay()];
-            const date = now.toLocaleDateString('el-GR');
+        // Configuration object for easy customization
+        const config = {
+            timezone: null,
+            locale: 'el-GR',
+            toggleInterval: 5 * 60 * 1000, // 5 minutes
+            updateInterval: 1000, // 1 second
+            showSeconds: false,
+            use24Hour: true,
+            enableAnimations: true
+        };
 
-            document.getElementById('clock').textContent = `${hours}:${minutes}`;
-            document.getElementById('date').textContent = `${day}, ${date}`;
+        // Utility functions
+        const utils = {
+            // Function to get URL query parameters with error handling
+            getQueryParam(param) {
+                try {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    return urlParams.get(param);
+                } catch (error) {
+                    console.warn('Error reading query parameters:', error);
+                    return null;
+                }
+            },
+
+            // Validate timezone
+            isValidTimezone(timezone) {
+                try {
+                    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+                    return true;
+                } catch (error) {
+                    return false;
+                }
+            },
+
+            // Get system timezone safely
+            getSystemTimezone() {
+                try {
+                    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+                } catch (error) {
+                    console.warn('Could not detect system timezone, using UTC');
+                    return 'UTC';
+                }
+            },
+
+            // Debounce function for performance
+            debounce(func, wait) {
+                let timeout;
+                return function executedFunction(...args) {
+                    const later = () => {
+                        clearTimeout(timeout);
+                        func(...args);
+                    };
+                    clearTimeout(timeout);
+                    timeout = setTimeout(later, wait);
+                };
+            }
+        };
+
+        // Initialize configuration from query parameters
+        function initializeConfig() {
+            const urlTimezone = utils.getQueryParam('timezone');
+            const showSecondsParam = utils.getQueryParam('seconds');
+            const use12Hour = utils.getQueryParam('12hour') === 'true';
+            const locale = utils.getQueryParam('locale') || config.locale;
+            
+            // Set timezone with validation
+            if (urlTimezone && utils.isValidTimezone(urlTimezone)) {
+                config.timezone = urlTimezone;
+            } else if (urlTimezone) {
+                console.warn(`Invalid timezone '${urlTimezone}', using system timezone`);
+                config.timezone = utils.getSystemTimezone();
+            } else {
+                config.timezone = utils.getSystemTimezone();
+            }
+
+            // Only override showSeconds if explicitly set to 'true'
+            config.showSeconds = showSecondsParam === 'true' ? true : config.showSeconds;
+            config.use24Hour = !use12Hour;
+            config.locale = locale;
+
+            console.log('Clock initialized with config:', config);
         }
 
-        function toggleClockMargin() {
-            const clockElement = document.querySelector('.clock');
-            if (clockElement.style.marginBottom === '4rem') {
-                clockElement.style.marginBottom = '0rem';
-            } else {
-                clockElement.style.marginBottom = '4rem';
+        // Enhanced day name translations
+        const dayTranslations = {
+            'el-GR': {
+                'Sunday': 'Κυριακή',
+                'Monday': 'Δευτέρα', 
+                'Tuesday': 'Τρίτη',
+                'Wednesday': 'Τετάρτη',
+                'Thursday': 'Πέμπτη',
+                'Friday': 'Παρασκευή',
+                'Saturday': 'Σάββατο'
+            },
+            'en-US': {
+                'Sunday': 'Sunday',
+                'Monday': 'Monday',
+                'Tuesday': 'Tuesday',
+                'Wednesday': 'Wednesday',
+                'Thursday': 'Thursday',
+                'Friday': 'Friday',
+                'Saturday': 'Saturday'
+            }
+        };
+
+        // Clock class for better organization
+        class DigitalClock {
+            constructor() {
+                this.clockElement = document.getElementById('clock');
+                this.dateElement = document.getElementById('date');
+                this.isVisible = document.visibilityState === 'visible';
+                this.lastTimeString = '';
+                this.lastDateString = '';
+                
+                if (!this.clockElement || !this.dateElement) {
+                    throw new Error('Clock or date elements not found');
+                }
+
+                this.setupVisibilityHandling();
+            }
+
+            setupVisibilityHandling() {
+                // Pause updates when page is not visible to save resources
+                document.addEventListener('visibilitychange', () => {
+                    this.isVisible = document.visibilityState === 'visible';
+                    if (this.isVisible) {
+                        this.updateTime(); // Update immediately when becoming visible
+                    }
+                });
+            }
+
+            updateTime() {
+                if (!this.isVisible) return; // Skip updates when not visible
+
+                try {
+                    const now = new Date();
+                    
+                    // Time formatting options
+                    const timeOptions = {
+                        timeZone: config.timezone,
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: !config.use24Hour
+                    };
+
+                    if (config.showSeconds) {
+                        timeOptions.second = '2-digit';
+                    }
+                    
+                    // Date formatting options
+                    const dateOptions = {
+                        timeZone: config.timezone,
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    };
+
+                    // Format time and date according to timezone
+                    const timeFormatter = new Intl.DateTimeFormat('en-US', timeOptions);
+                    const dateFormatter = new Intl.DateTimeFormat(config.locale, dateOptions);
+                    
+                    const timeString = timeFormatter.format(now);
+                    
+                    // Extract day name and handle translations
+                    const dateParts = dateFormatter.formatToParts(now);
+                    const dayName = dateParts.find(part => part.type === 'weekday')?.value;
+                    
+                    // Get translated day name
+                    const translations = dayTranslations[config.locale] || dayTranslations['en-US'];
+                    const translatedDayName = translations[dayName] || dayName;
+                    
+                    // Format date without day name for display
+                    const dateOnlyOptions = {
+                        timeZone: config.timezone,
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    };
+                    const dateOnly = new Intl.DateTimeFormat(config.locale, dateOnlyOptions).format(now);
+
+                    const dateString = `${translatedDayName}, ${dateOnly}`;
+
+                    // Update display with smooth transitions only if content changed
+                    if (timeString !== this.lastTimeString || dateString !== this.lastDateString) {
+                        this.updateDisplay(timeString, dateString);
+                        this.lastTimeString = timeString;
+                        this.lastDateString = dateString;
+                    }
+                    
+                } catch (error) {
+                    console.error('Error updating time:', error);
+                    // Fallback display
+                    this.updateDisplay('--:--', 'Error loading time');
+                }
+            }
+
+            updateDisplay(timeString, dateString) {
+                if (config.enableAnimations) {
+                    // Smooth update with fade effect
+                    this.clockElement.style.opacity = '0.7';
+                    setTimeout(() => {
+                        this.clockElement.textContent = timeString;
+                        this.dateElement.textContent = dateString;
+                        this.clockElement.style.opacity = '1';
+                    }, 50);
+                } else {
+                    this.clockElement.textContent = timeString;
+                    this.dateElement.textContent = dateString;
+                }
+            }
+
+            toggleClockMargin() {
+                if (!this.clockElement) return;
+                
+                const currentMargin = this.clockElement.style.marginBottom;
+                this.clockElement.style.marginBottom = currentMargin === '4rem' ? '0rem' : '4rem';
             }
         }
 
-        function toggleWeatherPosition() {
-            const weatherElement = document.querySelector('.wlr');
-            if (weatherElement.style.top === '25px') {
-                weatherElement.style.top = '15px';
-            } else {
-                weatherElement.style.top = '25px';
+        // UI Effects class
+        class UIEffects {
+            constructor() {
+                this.weatherElement = document.querySelector('.wlr');
+            }
+
+            toggleWeatherPosition() {
+                if (!this.weatherElement) return;
+                
+                const currentTop = this.weatherElement.style.top;
+                this.weatherElement.style.top = currentTop === '25px' ? '15px' : '25px';
             }
         }
 
-        setInterval(updateTime, 1000);
-        setInterval(toggleClockMargin, 5 * 60 * 1000); // Toggle margin every 5 minutes
-        // setInterval(toggleWeatherPosition, 5 * 60 * 1000); // Toggle margin every 5 minutes
-        updateTime(); // Initial call to display immediately
+        // Application initialization
+        let clockInstance;
+        let uiEffects;
+        let updateInterval;
+        let toggleInterval;
+
+        function initializeApp() {
+            try {
+                // Initialize configuration
+                initializeConfig();
+                
+                // Create instances
+                clockInstance = new DigitalClock();
+                uiEffects = new UIEffects();
+                
+                // Set up intervals
+                updateInterval = setInterval(() => clockInstance.updateTime(), config.updateInterval);
+                toggleInterval = setInterval(() => {
+                    clockInstance.toggleClockMargin();
+                    uiEffects.toggleWeatherPosition();
+                }, config.toggleInterval);
+                
+                // Initial update
+                clockInstance.updateTime();
+                
+                console.log('Digital clock application initialized successfully');
+                
+            } catch (error) {
+                console.error('Failed to initialize clock application:', error);
+                
+                // Fallback display
+                const clockEl = document.getElementById('clock');
+                const dateEl = document.getElementById('date');
+                if (clockEl && dateEl) {
+                    clockEl.textContent = 'Clock Error';
+                    dateEl.textContent = 'Please reload the page';
+                }
+            }
+        }
+
+        // Cleanup function for better resource management
+        function cleanup() {
+            if (updateInterval) clearInterval(updateInterval);
+            if (toggleInterval) clearInterval(toggleInterval);
+        }
+
+        // Handle page unload
+        window.addEventListener('beforeunload', cleanup);
+
+        // Initialize when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeApp);
+        } else {
+            initializeApp();
+        }
     </script>
 </body>
 </html>
